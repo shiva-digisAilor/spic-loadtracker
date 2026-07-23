@@ -216,3 +216,36 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# ============================================================
+# AI / ML Artifacts
+# ============================================================
+
+# Model weights and checkpoints
+*.pt
+*.pth
+*.bin
+*.ckpt
+*.safetensors
+
+# Model directories
+weights/
+checkpoints/
+sam3_logs/
+
+# Data files
+*.h5
+*.hdf5
+*.pkl
+*.pickle
+*.npy
+*.npz
+
+# Experiment outputs
+logs/
+runs/
+tensorboard/
+
+# BPE vocabulary files
+*.bpe
+*.vocab
