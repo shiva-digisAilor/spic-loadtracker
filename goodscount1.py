@@ -1,3 +1,30 @@
+"""
+Same as goods_counting_simple_sam3.py, EXCEPT the video model is loaded FROM
+MLflow's Model Registry instead of directly from HuggingFace.
+
+PREREQUISITE: you must have already run register_model.py at least once, so
+that "sam3-video-tracking-model" exists in the registry. If you haven't,
+run that first (see register_model.py).
+
+THREADING MODEL (three threads, decoupled by shared/locked buffers):
+  1. capture_thread   -> only calls cap.read(); never blocked by inference
+                         or rendering.
+  2. inference_worker -> only runs SAM3 forward passes on the latest
+                         available frame; never blocked by capture I/O
+                         or cv2.imshow.
+  3. main thread       -> only draws overlays / imshow / waitKey / MLflow
+                         logging on the latest available frame + result.
+
+Each stage always works on the freshest data available (double-buffered via
+a lock), so a slow stage never stalls the others -- it just causes that
+stage's consumer to reuse/skip stale data rather than blocking on it.
+
+Usage:
+    python goods_counting_from_registry_sam3.py
+or via MLflow Projects:
+    mlflow run . -e count_goods_registry --env-manager=local
+"""
+
 import cv2
 import time
 import torch
@@ -17,34 +44,20 @@ VIDEO_SOURCE = 0  # 0 = webcam. Set to a file path string to use a video file in
 
 MODEL_REGISTRY_NAME = "sam3-video-tracking-model"  # must match register_model.py
 
-# Categories kept deliberately distinct in shape so SAM3 
+# Categories kept deliberately distinct in shape so SAM3 (and you, reading the
+# counts) can actually tell them apart. Cardboard box / carton / package were
+# merged into one "box" category since they're the same real-world object.
 CARGO_CLASSES = {
-    "sack": {
-        "prompt": "a cargo sack, woven sack, fabric bag, or filled storage bag",
-        "color": (0, 165, 255),
-    },
-    "box": {
-        "prompt": "a cardboard box, carton, shipping box, or package",
-        "color": (255, 100, 0),
-    },
-    "crate": {
-        "prompt": "a wooden crate, plastic crate, storage crate, or cargo crate",
-        "color": (255, 0, 255),
-    },
+    "sack":  {"prompt": "sack or bag",             "color": (0, 165, 255)},  # orange
+    "box":   {"prompt": "cardboard box or carton", "color": (255, 100, 0)},  # blue
+    "crate": {"prompt": "wooden or plastic crate", "color": (255, 0, 255)},  # magenta
 }
 
-# INFER_WIDTH lowered 384 -> 256: on a 6GB laptop GPU (e.g. RTX 4050) this is
-# close to a 2x cut on the vision backbone's cost, on top of the 3x cut from
-# single-session batching below. Bump back up only if detection quality
-# visibly suffers.
-INFER_WIDTH = 256
+INFER_WIDTH = 384
 CONFIDENCE_THRESHOLD = 0.5
 MASK_ALPHA = 0.35
 
-# Lowered 1500 -> 500: with only 6GB VRAM, recycling tracking sessions more
-# often keeps memory growth in check and avoids CUDA OOM / stutters on long
-# runs.
-SESSION_RESET_EVERY_N_INFER = 500
+SESSION_RESET_EVERY_N_INFER = 1500
 LOG_GPU_MEMORY_EVERY_N_INFER = 200
 
 MLFLOW_EXPERIMENT_NAME = "goods-count-from-registry"
@@ -117,25 +130,21 @@ infer_w, infer_h = INFER_WIDTH, int(height * scale)
 
 
 def start_new_sessions():
-    """
-    Builds ONE shared SAM3 video session with all cargo-class prompts
-    attached to it (one add_text_prompt() call per class). This replaces
-    the old per-class session dict -- inference_worker() now runs a single
-    model forward pass per frame instead of one per class.
-    """
-    session = video_processor.init_video_session(
-        inference_device=device,
-        dtype=torch.bfloat16,
-    )
-    for spec in CARGO_CLASSES.values():
+    sessions = {}
+    for code, spec in CARGO_CLASSES.items():
+        session = video_processor.init_video_session(
+            inference_device=device,
+            dtype=torch.bfloat16,
+        )
         session = video_processor.add_text_prompt(
             inference_session=session,
             text=spec["prompt"],
         )
-    return session
+        sessions[code] = session
+    return sessions
 
 
-inference_sessions = start_new_sessions()  # a single shared session, despite the plural name (kept for diff-friendliness)
+inference_sessions = start_new_sessions()
 print("Streaming session started. Press ESC to quit.")
 
 # ============================================================
@@ -211,9 +220,6 @@ def capture_worker():
 
 # ============================================================
 # Thread 2: inference -- ONLY runs SAM3 on whatever frame is freshest.
-# One forward pass per frame (single shared multi-prompt session), then the
-# combined results are split back into per-class buckets using
-# outputs["prompt_to_obj_ids"].
 # ============================================================
 
 def inference_worker():
@@ -232,7 +238,7 @@ def inference_worker():
                 continue
 
             if infer_cycle > 0 and infer_cycle % SESSION_RESET_EVERY_N_INFER == 0:
-                print(f"[cycle {infer_cycle}] Resetting tracking session to bound memory growth...")
+                print(f"[cycle {infer_cycle}] Resetting all tracking sessions to bound memory growth...")
                 inference_sessions = start_new_sessions()
                 torch.cuda.empty_cache()
 
@@ -245,40 +251,31 @@ def inference_worker():
             small_rgb = cv2.cvtColor(small_bgr, cv2.COLOR_BGR2RGB)
             inputs = video_processor(images=small_rgb, device=device, return_tensors="pt")
 
-            # -- ONE forward pass for every class, via the shared session --
-            with torch.inference_mode():
-                model_outputs = video_model(inference_session=inference_sessions, frame=inputs.pixel_values[0])
-            outputs = video_processor.postprocess_outputs(
-                inference_sessions, model_outputs, original_sizes=inputs.original_sizes
-            )
+            new_result = {}
+            for code, session in inference_sessions.items():
+                with torch.inference_mode():
+                    model_outputs = video_model(inference_session=session, frame=inputs.pixel_values[0])
+                outputs = video_processor.postprocess_outputs(
+                    session, model_outputs, original_sizes=inputs.original_sizes
+                )
 
-            new_result = {code: {"boxes": np.zeros((0, 4)), "masks": [], "ids": np.zeros((0,), dtype=int),
-                                  "scores": np.zeros((0,))} for code in CARGO_CLASSES}
+                boxes = np.zeros((0, 4))
+                masks = []
+                ids = np.zeros((0,), dtype=int)
+                scores = np.zeros((0,))
+                if outputs and len(outputs["object_ids"]) > 0:
+                    raw_boxes = outputs["boxes"].cpu().numpy() / scale
+                    raw_masks = outputs["masks"].cpu().numpy()
+                    raw_ids = outputs["object_ids"].cpu().numpy()
+                    raw_scores = outputs["scores"].cpu().numpy()
 
-            if outputs and len(outputs.get("object_ids", [])) > 0:
-                object_ids = outputs["object_ids"].cpu().numpy()
-                raw_boxes = outputs["boxes"].cpu().numpy() / scale
-                raw_masks = outputs["masks"].cpu().numpy()
-                raw_scores = outputs["scores"].cpu().numpy()
-                prompt_to_obj_ids = outputs.get("prompt_to_obj_ids", {})
-                index_by_id = {int(oid): i for i, oid in enumerate(object_ids)}
+                    keep = raw_scores >= CONFIDENCE_THRESHOLD
+                    boxes = raw_boxes[keep]
+                    masks = raw_masks[keep]
+                    ids = raw_ids[keep]
+                    scores = raw_scores[keep]
 
-                for code, spec in CARGO_CLASSES.items():
-                    class_obj_ids = prompt_to_obj_ids.get(spec["prompt"], [])
-                    idxs = [index_by_id[int(o)] for o in class_obj_ids if int(o) in index_by_id]
-                    if not idxs:
-                        continue
-
-                    idx = np.array(idxs)
-                    cls_scores = raw_scores[idx]
-                    keep = cls_scores >= CONFIDENCE_THRESHOLD
-
-                    new_result[code] = {
-                        "boxes": raw_boxes[idx][keep],
-                        "masks": raw_masks[idx][keep],
-                        "ids": object_ids[idx][keep].astype(int),
-                        "scores": cls_scores[keep],
-                    }
+                new_result[code] = {"boxes": boxes, "masks": masks, "ids": ids, "scores": scores}
 
             with result_lock:
                 latest_result = new_result
@@ -292,7 +289,7 @@ def inference_worker():
             try:
                 torch.cuda.empty_cache()
                 inference_sessions = start_new_sessions()
-                print("Recovered: started fresh tracking session.")
+                print("Recovered: started fresh tracking sessions.")
             except Exception:
                 print("!! Recovery failed too. Stopping inference worker.")
                 traceback.print_exc()
