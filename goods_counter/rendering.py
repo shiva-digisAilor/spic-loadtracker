@@ -11,20 +11,21 @@ from goods_counter import mlflow_tracking
 
 
 def draw_detections(overlay, width, height, cargo_classes, result, counter, mask_alpha):
-    """Draws masks/boxes/labels for every detected object and registers
-    any newly-seen tracked ids with the counter. Mutates `overlay` in place."""
+    """Draws masks/boxes for every detected object and registers any
+    newly-seen tracked ids with the counter. Mutates `overlay` in place.
+
+    No per-object text label is drawn anymore (it got cluttered/overlapping
+    when multiple objects were close together) -- just the colored
+    mask/box outline. Counts are shown once, in the HUD, instead."""
     for code, spec in cargo_classes.items():
         color = spec["color"]
         class_result = result[code]
         boxes = class_result["boxes"]
         masks = class_result["masks"]
         ids = class_result["ids"]
-        scores = class_result["scores"]
 
         for i in range(len(ids)):
             obj_id = int(ids[i])
-            confidence = float(scores[i]) if i < len(scores) else 0.0
-
             x1, y1, x2, y2 = boxes[i].astype(int)
 
             counter.register(code, obj_id)
@@ -38,22 +39,24 @@ def draw_detections(overlay, width, height, cargo_classes, result, counter, mask
             else:
                 cv2.rectangle(overlay, (x1, y1), (x2, y2), color, 2)
 
-            label = f"{code} #{obj_id} {confidence:.2f}"
-            cv2.putText(overlay, label, (x1, max(15, y1 - 6)),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.45, color, 1, cv2.LINE_AA)
 
-
-def draw_hud(overlay, cargo_classes, counter, render_fps_display, capture_fps_display):
+def draw_hud(overlay, cargo_classes, counter, result, render_fps_display, capture_fps_display):
+    """HUD shows, per class: currently visible / total ever counted.
+    e.g. "box: 0/1" -- one box has been counted so far, but zero are in
+    frame right now. Starts at "0/0" before anything's been seen."""
     cv2.putText(overlay, f"Render FPS: {render_fps_display:.1f}  Capture FPS: {capture_fps_display:.1f}",
                 (10, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
 
     hud_y = 55
+    currently_visible_total = 0
     for code, spec in cargo_classes.items():
-        count = counter.total_count[code]
-        cv2.putText(overlay, f"{code}: {count}", (10, hud_y),
+        visible_now = len(result[code]["ids"])
+        total_ever = counter.total_count[code]
+        currently_visible_total += visible_now
+        cv2.putText(overlay, f"{code}: {visible_now}/{total_ever}", (10, hud_y),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.65, spec["color"], 2)
         hud_y += 28
-    cv2.putText(overlay, f"TOTAL: {counter.grand_total()}", (10, hud_y),
+    cv2.putText(overlay, f"TOTAL: {currently_visible_total}/{counter.grand_total()}", (10, hud_y),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.75, (255, 255, 255), 2)
 
 
@@ -96,7 +99,7 @@ def render_loop(state, counter, width, height, cargo_classes, mask_alpha,
             render_fps_count = 0
             render_fps_t0 = time.time()
 
-        draw_hud(overlay, cargo_classes, counter, render_fps_display, state.capture_fps_display)
+        draw_hud(overlay, cargo_classes, counter, result, render_fps_display, state.capture_fps_display)
 
         if frame_idx % mlflow_log_every_n_frames == 0:
             mlflow_tracking.log_frame_metrics(
