@@ -1,5 +1,16 @@
 """
 Thread 2: inference -- ONLY runs SAM3 on whatever frame is freshest.
+
+MEMORY: reactive, not scheduled. Every cycle, we check actual GPU memory
+usage. Once it crosses gpu_memory_reset_threshold_mb, all sessions get
+reset right then -- not on a fixed frame-count timer. If no GPU is
+present, we fall back to a fixed-cycle-count reset instead, since memory
+usage can't be queried the same way on CPU.
+
+Identity/counting uses SAM3's own object_ids directly (no separate
+position-based tracker) -- note this means a session reset can cause
+already-counted, still-visible objects to be assigned new ids and
+recounted. See the reset block below.
 """
 
 import time
@@ -48,7 +59,9 @@ def _run_one_class(video_model, video_processor, session, inputs, scale, confide
 
 def inference_worker(state, session_holder, video_model, video_processor, device, using_gpu,
                       cargo_classes, scale, infer_w, infer_h,
-                      confidence_threshold, session_reset_every_n_infer,
+                      confidence_threshold,
+                      gpu_memory_reset_threshold_mb,
+                      cpu_fallback_reset_every_n_infer,
                       log_gpu_memory_every_n_infer):
     infer_cycle = 0
 
@@ -62,10 +75,20 @@ def inference_worker(state, session_holder, video_model, video_processor, device
                 time.sleep(0.005)
                 continue
 
-            if infer_cycle > 0 and infer_cycle % session_reset_every_n_infer == 0:
-                print(f"[cycle {infer_cycle}] Resetting all tracking sessions to bound memory growth...")
-                session_holder.sessions = start_new_sessions(video_processor, device, cargo_classes)
-                torch.cuda.empty_cache()
+            # ---- reactive memory check ----
+            if using_gpu:
+                allocated_mb = torch.cuda.memory_allocated(device) / (1024 ** 2)
+                if allocated_mb > gpu_memory_reset_threshold_mb:
+                    print(f"[cycle {infer_cycle}] GPU memory {allocated_mb:.0f}MB > "
+                          f"{gpu_memory_reset_threshold_mb}MB threshold -- resetting sessions...")
+                    session_holder.sessions = start_new_sessions(video_processor, device, cargo_classes)
+                    torch.cuda.empty_cache()
+            else:
+                # No GPU to query -- fall back to a fixed-cycle-count reset
+                # so memory still gets bounded eventually on CPU-only runs.
+                if infer_cycle > 0 and infer_cycle % cpu_fallback_reset_every_n_infer == 0:
+                    print(f"[cycle {infer_cycle}] CPU fallback reset -- resetting sessions...")
+                    session_holder.sessions = start_new_sessions(video_processor, device, cargo_classes)
 
             if infer_cycle % log_gpu_memory_every_n_infer == 0 and using_gpu:
                 allocated = torch.cuda.memory_allocated(device) / (1024 ** 2)

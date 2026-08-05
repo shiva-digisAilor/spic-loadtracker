@@ -21,10 +21,20 @@ INFER_WIDTH = 384
 CONFIDENCE_THRESHOLD = 0.5
 MASK_ALPHA = 0.35
 
-SESSION_RESET_EVERY_N_INFER = 1500
+# Reactive memory management: once GPU memory currently in use crosses this
+# many MB, all tracking sessions are reset right then (not on a fixed
+# schedule). Tune based on your GPU's total VRAM -- e.g. on a 6GB card,
+# something like 4000-4500 leaves reasonable headroom; on a 24GB card you
+# could set this much higher.
+GPU_MEMORY_RESET_THRESHOLD_MB = 4000
+
+# Only used as a fallback when no GPU is available (memory can't be
+# queried the same way on CPU) -- resets every N cycles instead.
+CPU_FALLBACK_RESET_EVERY_N_INFER = 1500
+
 LOG_GPU_MEMORY_EVERY_N_INFER = 200
 
 MLFLOW_EXPERIMENT_NAME = "goods-count-from-registry"
 MLFLOW_LOG_EVERY_N_FRAMES = 30
 
-WINDOW_NAME = "SAM3 Goods Counter (from Registry)"
+WINDOW_NAME = "SAM3 Goods Counter"

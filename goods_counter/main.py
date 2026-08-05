@@ -22,15 +22,15 @@ import threading
 import cv2
 import torch
 
-from goods_counter import config
-from goods_counter import model_loader
-from goods_counter import mlflow_tracking
-from goods_counter.sessions import start_new_sessions
-from goods_counter.shared_state import SharedState
-from goods_counter.counting import GoodsCounter
-from goods_counter.capture import capture_worker
-from goods_counter.inference import inference_worker, SessionHolder
-from goods_counter.rendering import render_loop
+from good_counter1 import config
+from good_counter1 import model_loader
+from good_counter1 import mlflow_tracking
+from good_counter1.sessions import start_new_sessions
+from good_counter1.shared_state import SharedState
+from good_counter1.counting import GoodsCounter
+from good_counter1.capture import capture_worker
+from good_counter1.inference import inference_worker, SessionHolder
+from good_counter1.rendering import render_loop
 
 
 def main():
@@ -67,7 +67,7 @@ def main():
     scale = config.INFER_WIDTH / width
     infer_w, infer_h = config.INFER_WIDTH, int(height * scale)
 
-    # ---- tracking sessions / shared state / counting ----
+    # ---- tracking sessions (persistent, periodically reset) / shared state / counting ----
     session_holder = SessionHolder(start_new_sessions(video_processor, device, config.CARGO_CLASSES))
     print("Streaming session started. Press ESC to quit.")
 
@@ -80,7 +80,9 @@ def main():
         target=inference_worker,
         args=(state, session_holder, video_model, video_processor, device, using_gpu,
               config.CARGO_CLASSES, scale, infer_w, infer_h,
-              config.CONFIDENCE_THRESHOLD, config.SESSION_RESET_EVERY_N_INFER,
+              config.CONFIDENCE_THRESHOLD,
+              config.GPU_MEMORY_RESET_THRESHOLD_MB,
+              config.CPU_FALLBACK_RESET_EVERY_N_INFER,
               config.LOG_GPU_MEMORY_EVERY_N_INFER),
         daemon=True,
     )
