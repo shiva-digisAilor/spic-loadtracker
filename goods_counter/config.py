@@ -37,4 +37,12 @@ LOG_GPU_MEMORY_EVERY_N_INFER = 200
 MLFLOW_EXPERIMENT_NAME = "goods-count-from-registry"
 MLFLOW_LOG_EVERY_N_FRAMES = 30
 
+# A newly-detected higher count must hold steady for this many consecutive
+# render frames before the grand total accepts it. Filters out one-frame
+# noise spikes (mask fragmentation, borderline confidence, motion blur)
+# without needing appearance memory or identity tracking. Raise this if
+# you still see occasional false bumps; lower it if a genuine new object
+# takes too long to register.
+COUNT_CONFIRM_FRAMES = 8
+
 WINDOW_NAME = "SAM3 Goods Counter"

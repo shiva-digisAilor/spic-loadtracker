@@ -3,14 +3,16 @@ Thread 2: inference -- ONLY runs SAM3 on whatever frame is freshest.
 
 MEMORY: reactive, not scheduled. Every cycle, we check actual GPU memory
 usage. Once it crosses gpu_memory_reset_threshold_mb, all sessions get
-reset right then -- not on a fixed frame-count timer. If no GPU is
-present, we fall back to a fixed-cycle-count reset instead, since memory
-usage can't be queried the same way on CPU.
+reset right then. If no GPU is present, we fall back to a fixed-cycle-count
+reset instead.
 
-Identity/counting uses SAM3's own object_ids directly (no separate
-position-based tracker) -- note this means a session reset can cause
-already-counted, still-visible objects to be assigned new ids and
-recounted. See the reset block below.
+COUNTING: no longer affected by session resets at all. Object ids from
+SAM3 are used only as cosmetic badge numbers in the display (see
+rendering.py) -- the actual grand total (counting.py) is based on "how
+many were visible at once," not on matching individual object identities.
+This means a session reset can still cause an object's on-screen badge
+number to jump around, but it can no longer cause the grand total to be
+wrong.
 """
 
 import time
@@ -84,8 +86,6 @@ def inference_worker(state, session_holder, video_model, video_processor, device
                     session_holder.sessions = start_new_sessions(video_processor, device, cargo_classes)
                     torch.cuda.empty_cache()
             else:
-                # No GPU to query -- fall back to a fixed-cycle-count reset
-                # so memory still gets bounded eventually on CPU-only runs.
                 if infer_cycle > 0 and infer_cycle % cpu_fallback_reset_every_n_infer == 0:
                     print(f"[cycle {infer_cycle}] CPU fallback reset -- resetting sessions...")
                     session_holder.sessions = start_new_sessions(video_processor, device, cargo_classes)

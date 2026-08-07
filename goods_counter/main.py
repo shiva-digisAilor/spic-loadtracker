@@ -22,15 +22,15 @@ import threading
 import cv2
 import torch
 
-from good_counter1 import config
-from good_counter1 import model_loader
-from good_counter1 import mlflow_tracking
-from good_counter1.sessions import start_new_sessions
-from good_counter1.shared_state import SharedState
-from good_counter1.counting import GoodsCounter
-from good_counter1.capture import capture_worker
-from good_counter1.inference import inference_worker, SessionHolder
-from good_counter1.rendering import render_loop
+from good_counter2 import config
+from good_counter2 import model_loader
+from good_counter2 import mlflow_tracking
+from good_counter2.sessions import start_new_sessions
+from good_counter2.shared_state import SharedState
+from good_counter2.counting import GoodsCounter
+from good_counter2.capture import capture_worker
+from good_counter2.inference import inference_worker, SessionHolder
+from good_counter2.rendering import render_loop
 
 
 def main():
@@ -72,7 +72,7 @@ def main():
     print("Streaming session started. Press ESC to quit.")
 
     state = SharedState(config.CARGO_CLASSES)
-    counter = GoodsCounter(config.CARGO_CLASSES)
+    counter = GoodsCounter(config.CARGO_CLASSES, confirm_frames=config.COUNT_CONFIRM_FRAMES)
 
     # ---- start capture + inference threads ----
     capture_thread = threading.Thread(target=capture_worker, args=(cap, state), daemon=True)
