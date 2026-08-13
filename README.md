@@ -1,4 +1,4 @@
-# Goods Counter 2
+# Goods Counter 
 
 A real-time goods/object counter using SAM3 (Segment Anything Model 3) video tracking. This application uses a multi-threaded architecture to count objects in video feeds with customizable cargo categories like sacks, boxes, and crates.
 
