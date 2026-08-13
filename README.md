@@ -49,7 +49,7 @@ See `requirements.txt` for all dependencies. Key requirements:
 Run the counter from the command line:
 
 ```bash
-python -m good_counter2.main
+python -m good_counter.main
 ```
 
 ### MLflow Projects
