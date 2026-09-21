@@ -17,7 +17,7 @@ CARGO_CLASSES = {
     "crate": {"prompt": "wooden or plastic crate", "color": (255, 0, 255)},  # magenta
 }
 
-INFER_WIDTH = 384
+INFER_WIDTH = 512
 CONFIDENCE_THRESHOLD = 0.5
 MASK_ALPHA = 0.35
 
@@ -26,7 +26,7 @@ MASK_ALPHA = 0.35
 # schedule). Tune based on your GPU's total VRAM -- e.g. on a 6GB card,
 # something like 4000-4500 leaves reasonable headroom; on a 24GB card you
 # could set this much higher.
-GPU_MEMORY_RESET_THRESHOLD_MB = 4000
+GPU_MEMORY_RESET_THRESHOLD_MB = 4500
 
 # Only used as a fallback when no GPU is available (memory can't be
 # queried the same way on CPU) -- resets every N cycles instead.
